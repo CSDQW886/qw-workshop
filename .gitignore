@@ -1,0 +1,38 @@
+# ===== 构建产物 =====
+build/
+*.apk
+*.idsig
+*.dex
+*.odex
+*.vdex
+_archive_stale_dex/
+
+# ===== 签名与凭据（绝对不要提交） =====
+*.keystore
+*.jks
+*.p12
+*.pem
+keystore.properties
+sign.properties
+
+# ===== 本地环境 / 备份 =====
+_archive/
+_bak*/
+_tmp/
+_work/
+_wd/
+_we/
+*.log
+*.bak
+*.orig
+*.rej
+*.patch.tmp
+
+# ===== 系统与编辑器 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.iml
+*.swp
