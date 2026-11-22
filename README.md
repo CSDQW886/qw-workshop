@@ -80,11 +80,16 @@ Android 端的 **Steam 创意工坊（Wallpaper Engine）浏览 / 下载客户�
 工程是「apktool 反编译基座 + 前端资源重写」的混合结构：`assets/` 下的 HTML / CSS / JS 是应用界面与逻辑，`smali/` 是桥接层。
 
 ```bash
-# 1. 编译资源与 smali
-apktool b . -o build/qw-u127.apk -f
 
-# 2. 合并基座 dex / 原生库，对齐并签名
-python3 ../../02-scripts/build_v127.py
+# 一键构建（apktool b → zipalign → 签名）
+./tools/build.sh
+
+# 只想出未签名包
+apktool b . -o build/qw-unsigned.apk -f
+
+# 带自己的 keystore 直接出签名包
+KS=./qw.keystore ALIAS=qw PASS=你的口令 ./tools/build.sh
+
 ```
 
 产物：`build/qw-s127.apk`（zipalign + apksigner 校验通过），签名 `CN=WE Preview`，与旧版同签名可覆盖升级。
