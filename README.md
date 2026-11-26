@@ -4,7 +4,7 @@ Android 端的 **Steam 创意工坊（Wallpaper Engine）浏览 / 下载客户�
 
 - 开源仓库：**https://github.com/CSDQW886/qw-workshop**
 - 作者：枪神爱吃牛肉面 · 反馈 TG：[@CSDQW558](https://t.me/CSDQW558) · 讨论群：https://t.me/QWnb9178
-- 当前版本：**1.1.0**（versionCode 127）
+- 当前版本：**1.1.4**（versionCode 131）
 
 ---
 
@@ -109,6 +109,24 @@ AndroidManifest.xml
 ---
 
 ## 版本记录
+### v1.1.4 (2026-11)
+- **变更**：诊断面板「分享日志」改为「下载日志」，直接把日志写成 TXT 到 `Download/QW-Workshop-日志/`
+- **修复**：`LogProvider.openFile` 判空写反导致「分享日志点了没反应」
+- **修复**：退出应用时 `hideLogin` 空指针（每次退出都留一条崩溃记录）
+- **修复**：`CrashHandler` 与 `appVersion` 的判空写反，日志里版本号恒为旧值
+
+### v1.1.3 (2026-11)
+- **新增**：本地日志系统，按日期分文件写入 `app_logs/qw-YYYY-MM-DD.log`，仅保留最近 3 天
+- **新增**：全局崩溃捕获，堆栈写入 `last_crash.txt`（含版本号、机型、系统版本、线程名）
+- **新增**：诊断面板（版本与设备信息 / 一键复制 / 分享 / 崩溃红字提示）
+- **新增**：前端性能采样，记录卡顿、长任务、滑不动、长按无响应、点击延迟，并附环境快照
+- **安全**：所有日志与崩溃文件在写盘前统一脱敏（refresh_token、cookie 等一律掩码）
+
+### v1.1.2 (2026-11)
+- **修复**：列表滚动失效（`overflow: clip` / `backdrop-filter` 在部分 WebView 下的兼容问题）
+
+### v1.1.1 (2026-11)
+- **优化**：浏览与下载共用一次登录，不再重复登录
 
 ### v1.1.0 (2026-11)
 
