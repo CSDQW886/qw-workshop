@@ -81,10 +81,11 @@ input{font-family:inherit}
 .drawer{
   position:fixed;left:0;top:0;bottom:0;width:94vw;max-width:430px;z-index:50;
   background:#080b10;border-right:1px solid #131a22;display:flex;flex-direction:column;
-  transform:translateX(-104%);transition:transform .26s cubic-bezier(.2,.8,.2,1);
+  transform:translateX(-104%);visibility:hidden;
+  transition:transform .26s cubic-bezier(.2,.8,.2,1),visibility .26s;
   padding-top:env(safe-area-inset-top);
 }
-.drawer.open{transform:none}
+.drawer.open{transform:none;visibility:visible}
 .dhead{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #131a22;font-size:17px;font-weight:700}
 .dbody{flex:1;overflow:auto;padding:4px 18px 16px}
 .fg{padding:18px 0;border-bottom:1px solid #0f141b}
@@ -111,7 +112,7 @@ input{font-family:inherit}
 .btn:active{filter:brightness(.94)}
 
 /* ---------- 免责声明 ---------- */
-.gate{position:fixed;top:0;right:0;bottom:0;left:0;z-index:90;background:rgba(3,5,8,.82);backdrop-filter:blur(6px);display:grid;place-items:center;padding:20px}
+.gate{position:fixed;top:0;right:0;bottom:0;left:0;z-index:90;background:rgba(3,5,8,.965);display:grid;place-items:center;padding:20px}
 .gate-card{width:96vw;max-width:640px;max-height:88vh;overflow:auto;background:linear-gradient(180deg,#0c1219,#080c11);border:1px solid #1a222c;border-radius:20px;padding:24px 24px 18px}
 .gate-logo{width:46px;height:46px;border-radius:13px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);display:grid;place-items:center;font-weight:900;font-size:22px;color:#fff;margin-bottom:12px}
 .gate h1{margin:0 0 4px;font-size:19px}
@@ -217,7 +218,9 @@ input{font-family:inherit}
 /* ================= 响应式适配 v1.0.0-r20（手机 ≤640 / 平板 641-1024 / 大屏 >1024） ================= */
 html{-webkit-text-size-adjust:100%}
 html,body{overflow-x:hidden}
-body{overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;touch-action:manipulation}
+/* v1.1.2 滚动修复：clip 不创建滚动容器，避免 html 变成 scroll container 后 WebView 首帧不认 */
+@supports (overflow:clip){html,body{overflow-x:clip}}
+body{overscroll-behavior-y:contain;touch-action:manipulation}
 /* 触屏 300ms 延迟与双击缩放：所有可点元素统一 manipulation */
 button,.btn,.chip,.ib,.db,.pbtn,.pill,.card,.dl-row,.dl-acts,.dhead,.dls-head,a{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 /* 触屏热区保障 ≥44px（仅粗指针设备，鼠标环境保留紧凑尺寸） */
@@ -403,3 +406,10 @@ button,.btn,.chip,.ib,.db,.pbtn,.pill,.card,.dl-row,.dl-acts,.dhead,.dls-head,a{
 #qwErrBar{position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#3a0d0d;
   color:#ffd7d7;font:12px/1.5 monospace;padding:8px 10px;max-height:38vh;overflow:auto;
   border-top:1px solid #7a2020}
+
+/* ---------- v1.1.3 诊断与反馈 ---------- */
+.crash-tip{background:rgba(220,38,38,.16);border:1px solid rgba(248,113,113,.5);color:#ff9b9b;border-radius:12px;padding:10px 12px;font-size:12.5px;line-height:1.5;margin:12px 0 2px;font-weight:700}
+.diag-pre{margin:10px 0;padding:10px 12px;background:#0a0f15;border:1px solid #16202b;border-radius:12px;color:#9fb0c3;font-size:11.5px;line-height:1.6;white-space:pre-wrap;word-break:break-all;max-height:150px;overflow:auto}
+.diag-log{margin:10px 0 0;padding:10px 12px;background:#070b10;border:1px solid #141d26;border-radius:12px;color:#7f8fa3;font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-all;max-height:38vh;overflow:auto}
+.diag-acts{display:flex;gap:10px;margin:10px 0 0;flex-wrap:wrap}
+.diag-acts .btn{flex:1 1 auto;min-width:120px}
