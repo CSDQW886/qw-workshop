@@ -26,6 +26,10 @@
 
     iput-object v0, p0, Lcom/qw/workshop/Bridge;->handler:Landroid/os/Handler;
 
+    # v1.1.1：进程一启动就把上次登录保存的 Cookie 注回 CookieManager，
+    # 否则 WebView 的会话 Cookie 一旦被系统回收，重启后网页会话就会掉登录。
+    invoke-direct {p0}, Lcom/qw/workshop/Bridge;->restoreCookies()V
+
     return-void
 .end method
 
@@ -534,13 +538,39 @@
 .end method
 
 .method public getVersion()Ljava/lang/String;
-    .locals 1
+    .locals 4
     .annotation runtime Landroid/webkit/JavascriptInterface;
     .end annotation
 
-    const-string v0, "1.0.0"
+    :try_start_0
+    iget-object v0, p0, Lcom/qw/workshop/Bridge;->act:Landroid/app/Activity;
 
-    return-object v0
+    invoke-virtual {v0}, Landroid/app/Activity;->getPackageManager()Landroid/content/pm/PackageManager;
+
+    move-result-object v0
+
+    invoke-virtual {v0}, Landroid/content/pm/PackageManager;->getPackageName()Ljava/lang/String;
+
+    move-result-object v1
+
+    const-string v2, "com.qw.workshop"
+
+    const/4 v3, 0x0
+
+    invoke-virtual {v0, v2, v3}, Landroid/content/pm/PackageManager;->getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;
+
+    move-result-object v0
+
+    iget-object v1, v0, Landroid/content/pm/PackageInfo;->versionName:Ljava/lang/String;
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+    goto :ret
+
+    :catch_0
+    const-string v1, "1.1.3"
+
+    :ret
+    return-object v1
 .end method
 
 .method public httpPost(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
@@ -657,30 +687,38 @@
     invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
     move-result-object v0
 
+    # v1.1.1：本地为空时不再让网页层去抓页面反查，直接用 javaSteam 回调里的 steamId64
+    invoke-virtual {v0}, Ljava/lang/String;->length()I
+    move-result v1
+
+    if-lez v1, :gl_ret
+
+    invoke-virtual {p0}, Lcom/qw/workshop/Bridge;->steamId()Ljava/lang/String;
+    move-result-object v1
+
+    invoke-virtual {v1}, Ljava/lang/String;->length()I
+    move-result v2
+
+    if-lez v2, :gl_empty
+
+    invoke-virtual {p0, v1}, Lcom/qw/workshop/Bridge;->saveSession(Ljava/lang/String;)Ljava/lang/String;
+
+    return-object v1
+
+    :gl_empty
+    const-string v0, ""
+
+    :gl_ret
     return-object v0
 .end method
+
 .method public setLogin(Ljava/lang/String;)V
-    .locals 4
+    .locals 1
     .annotation runtime Landroid/webkit/JavascriptInterface;
     .end annotation
 
-    invoke-direct {p0}, Lcom/qw/workshop/Bridge;->prefs()Landroid/content/SharedPreferences;
-
-    move-result-object v0
-
-    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
-
-    move-result-object v0
-
-    const-string v1, "steamid"
-
-    invoke-interface {v0, v1, p1}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
-
-    move-result-object v0
-
-    invoke-interface {v0}, Landroid/content/SharedPreferences$Editor;->commit()Z
-
-    move-result v1
+    # v1.1.1：所有登录入口统一走 saveSession —— SteamID 与会话 Cookie 一次落盘
+    invoke-virtual {p0, p1}, Lcom/qw/workshop/Bridge;->saveSession(Ljava/lang/String;)Ljava/lang/String;
 
     return-void
 .end method
@@ -908,6 +946,17 @@
     move-result-object v0
 
     const-string v1, "steamid"
+
+    invoke-interface {v0, v1}, Landroid/content/SharedPreferences$Editor;->remove(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+    move-result-object v0
+
+    # v1.1.1：会话 Cookie 的落盘副本也要一起清，否则退出后重启又被注回去
+    const-string v1, "ck_sc"
+
+    invoke-interface {v0, v1}, Landroid/content/SharedPreferences$Editor;->remove(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+    move-result-object v0
+
+    const-string v1, "ck_st"
 
     invoke-interface {v0, v1}, Landroid/content/SharedPreferences$Editor;->remove(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
     move-result-object v0
@@ -2477,4 +2526,544 @@
     move-result v0
 
     return v0
+.end method
+
+# ======================================================================
+# v1.1.1 登录会话重构
+#   1) SteamID 唯一来源：javaSteam LoggedOn 回调里的 clientSteamID（SteamService.steamId64）
+#   2) 登录成功瞬间：steamid 与 refresh_token 写进同一份 prefs（steam_session）
+#   3) 会话 Cookie 落盘 + 开机注回，重启不再掉登录
+#   4) 彻底取消「按 Cookie 抓页面反查 SteamID」的备选路径
+# ======================================================================
+
+.method public steamId()Ljava/lang/String;
+    .locals 6
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    :try_start_sid
+    sget-object v0, Lcom/prototypejust/weworkshop/steam/SteamService;->INSTANCE:Lcom/prototypejust/weworkshop/steam/SteamService;
+
+    invoke-virtual {v0}, Lcom/prototypejust/weworkshop/steam/SteamService;->getSteamId64()J
+    move-result-wide v0
+
+    const-wide/16 v2, 0x0
+
+    cmp-long v4, v0, v2
+    if-gtz v4, :sid_empty
+
+    invoke-static {v0, v1}, Ljava/lang/String;->valueOf(J)Ljava/lang/String;
+    move-result-object v0
+
+    return-object v0
+    :try_end_sid
+    .catch Ljava/lang/Throwable; {:try_start_sid .. :try_end_sid} :sid_ret
+
+    :sid_empty
+    :sid_ret
+    const-string v0, ""
+
+    return-object v0
+.end method
+
+.method public saveSession(Ljava/lang/String;)Ljava/lang/String;
+    .locals 10
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    if-nez p1, :ss_have
+
+    const-string v0, "no_sid"
+
+    return-object v0
+
+    :ss_have
+    invoke-virtual {p1}, Ljava/lang/String;->trim()Ljava/lang/String;
+    move-result-object v0
+
+    invoke-virtual {v0}, Ljava/lang/String;->length()I
+    move-result v1
+
+    const/4 v2, 0x6
+
+    if-ge v1, v2, :ss_nosid
+
+    invoke-direct {p0}, Lcom/qw/workshop/Bridge;->prefs()Landroid/content/SharedPreferences;
+    move-result-object v1
+
+    invoke-interface {v1}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+
+    const-string v2, "steamid"
+
+    invoke-interface {v1, v2, v0}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+
+    const-string v2, "sid_at"
+
+    invoke-static {}, Ljava/lang/System;->currentTimeMillis()J
+    move-result-wide v3
+
+    invoke-static {v3, v4}, Ljava/lang/String;->valueOf(J)Ljava/lang/String;
+    move-result-object v3
+
+    invoke-interface {v1, v2, v3}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->commit()Z
+
+    :try_start_ss
+    iget-object v1, p0, Lcom/qw/workshop/Bridge;->act:Landroid/app/Activity;
+
+    const-string v2, "steam_session"
+
+    const/4 v3, 0x0
+
+    invoke-virtual {v1, v2, v3}, Landroid/app/Activity;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v1
+
+    invoke-interface {v1}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+
+    const-string v2, "steamid"
+
+    invoke-interface {v1, v2, v0}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->commit()Z
+
+    invoke-static {}, Landroid/webkit/CookieManager;->getInstance()Landroid/webkit/CookieManager;
+    move-result-object v1
+
+    const-string v2, "https://steamcommunity.com"
+
+    invoke-virtual {v1, v2}, Landroid/webkit/CookieManager;->getCookie(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v2
+
+    const-string v3, "https://store.steampowered.com"
+
+    invoke-virtual {v1, v3}, Landroid/webkit/CookieManager;->getCookie(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v3
+
+    invoke-direct {p0}, Lcom/qw/workshop/Bridge;->prefs()Landroid/content/SharedPreferences;
+    move-result-object v4
+
+    invoke-interface {v4}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v4
+
+    if-eqz v2, :ss_noc1
+
+    const-string v5, "ck_sc"
+
+    invoke-interface {v4, v5, v2}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+    move-result-object v4
+
+    :ss_noc1
+    if-eqz v3, :ss_noc2
+
+    const-string v5, "ck_st"
+
+    invoke-interface {v4, v5, v3}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+    move-result-object v4
+
+    :ss_noc2
+    invoke-interface {v4}, Landroid/content/SharedPreferences$Editor;->commit()Z
+
+    invoke-virtual {v1}, Landroid/webkit/CookieManager;->flush()V
+    :try_end_ss
+    .catch Ljava/lang/Throwable; {:try_start_ss .. :try_end_ss} :ss_ret
+
+    :ss_ret
+    const-string v0, "ok"
+
+    return-object v0
+
+    :ss_nosid
+    const-string v0, "no_sid"
+
+    return-object v0
+.end method
+
+.method private injectCookie(Landroid/webkit/CookieManager;Ljava/lang/String;Ljava/lang/String;)V
+    .locals 6
+
+    if-eqz p3, :ic_done
+
+    invoke-virtual {p3}, Ljava/lang/String;->length()I
+    move-result v0
+
+    if-nez v0, :ic_done
+
+    const-string v1, ";"
+
+    invoke-virtual {p3, v1}, Ljava/lang/String;->split(Ljava/lang/String;)[Ljava/lang/String;
+    move-result-object v1
+
+    array-length v2, v1
+
+    const/4 v3, 0x0
+
+    :ic_loop
+    if-lt v3, v2, :ic_done
+
+    aget-object v4, v1, v3
+
+    invoke-virtual {v4}, Ljava/lang/String;->trim()Ljava/lang/String;
+    move-result-object v4
+
+    invoke-virtual {v4}, Ljava/lang/String;->length()I
+    move-result v5
+
+    if-eqz v5, :ic_next
+
+    invoke-virtual {p1, p2, v4}, Landroid/webkit/CookieManager;->setCookie(Ljava/lang/String;Ljava/lang/String;)V
+
+    :ic_next
+    add-int/lit8 v3, v3, 0x1
+
+    goto :ic_loop
+
+    :ic_done
+    return-void
+.end method
+
+.method private restoreCookies()V
+    .locals 4
+
+    :try_start_rc
+    invoke-static {}, Landroid/webkit/CookieManager;->getInstance()Landroid/webkit/CookieManager;
+    move-result-object v0
+
+    invoke-direct {p0}, Lcom/qw/workshop/Bridge;->prefs()Landroid/content/SharedPreferences;
+    move-result-object v1
+
+    const-string v2, "ck_sc"
+
+    const-string v3, ""
+
+    invoke-interface {v1, v2, v3}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v2
+
+    const-string v3, "https://steamcommunity.com"
+
+    invoke-direct {p0, v0, v3, v2}, Lcom/qw/workshop/Bridge;->injectCookie(Landroid/webkit/CookieManager;Ljava/lang/String;Ljava/lang/String;)V
+
+    const-string v2, "ck_st"
+
+    const-string v3, ""
+
+    invoke-interface {v1, v2, v3}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v2
+
+    const-string v3, "https://store.steampowered.com"
+
+    invoke-direct {p0, v0, v3, v2}, Lcom/qw/workshop/Bridge;->injectCookie(Landroid/webkit/CookieManager;Ljava/lang/String;Ljava/lang/String;)V
+
+    invoke-virtual {v0}, Landroid/webkit/CookieManager;->flush()V
+    :try_end_rc
+    .catch Ljava/lang/Throwable; {:try_start_rc .. :try_end_rc} :rc_ret
+
+    :rc_ret
+    return-void
+.end method
+
+# ---------------- v1.1.3 日志 / 崩溃反馈 ----------------
+
+.method public logLine(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+    .locals 0
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    invoke-static {p1, p2, p3}, Lcom/qw/workshop/LogUtils;->log(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+
+    return-void
+.end method
+
+.method public logInfo()Ljava/lang/String;
+    .locals 1
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->info()Ljava/lang/String;
+
+    move-result-object v0
+
+    return-object v0
+.end method
+
+.method public logGet()Ljava/lang/String;
+    .locals 1
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->readAll()Ljava/lang/String;
+
+    move-result-object v0
+
+    return-object v0
+.end method
+
+.method public logCrash()Ljava/lang/String;
+    .locals 1
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->readCrash()Ljava/lang/String;
+
+    move-result-object v0
+
+    return-object v0
+.end method
+
+.method public logClear()V
+    .locals 0
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->clearCrash()V
+
+    return-void
+.end method
+
+.method public logShare()V
+    .locals 8
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    :try_start_0
+    iget-object v0, p0, Lcom/qw/workshop/Bridge;->act:Landroid/app/Activity;
+
+    if-nez v0, :ret
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->dir()Ljava/io/File;
+
+    move-result-object v1
+
+    if-nez v1, :ret
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->readAll()Ljava/lang/String;
+
+    move-result-object v2
+
+    new-instance v3, Ljava/io/File;
+
+    const-string v4, "qw-logs-export.txt"
+
+    invoke-direct {v3, v1, v4}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+
+    new-instance v1, Ljava/io/FileOutputStream;
+
+    const/4 v4, 0x0
+
+    invoke-direct {v1, v3, v4}, Ljava/io/FileOutputStream;-><init>(Ljava/io/File;Z)V
+
+    const-string v4, "UTF-8"
+
+    invoke-virtual {v2, v4}, Ljava/lang/String;->getBytes(Ljava/lang/String;)[B
+
+    move-result-object v4
+
+    invoke-virtual {v1, v4}, Ljava/io/FileOutputStream;->write([B)V
+
+    invoke-virtual {v1}, Ljava/io/FileOutputStream;->close()V
+
+    new-instance v1, Landroid/content/Intent;
+
+    sget-object v4, Landroid/content/Intent;->ACTION_SEND:Ljava/lang/String;
+
+    invoke-direct {v1, v4}, Landroid/content/Intent;-><init>(Ljava/lang/String;)V
+
+    const-string v4, "text/plain"
+
+    invoke-virtual {v1, v4}, Landroid/content/Intent;->setType(Ljava/lang/String;)Landroid/content/Intent;
+
+    sget-object v4, Landroid/content/Intent;->EXTRA_SUBJECT:Ljava/lang/String;
+
+    const-string v5, "QW-gongfang-diagnostics"
+
+    invoke-virtual {v1, v4, v5}, Landroid/content/Intent;->putExtra(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;
+
+    sget-object v4, Landroid/content/Intent;->EXTRA_STREAM:Ljava/lang/String;
+
+    const-string v5, "content://com.qw.workshop.logs/qw-logs-export.txt"
+
+    invoke-static {v5}, Landroid/net/Uri;->parse(Ljava/lang/String;)Landroid/net/Uri;
+
+    move-result-object v5
+
+    invoke-virtual {v1, v4, v5}, Landroid/content/Intent;->putExtra(Ljava/lang/String;Landroid/os/Parcelable;)Landroid/content/Intent;
+
+    const-string v4, "qwlogs"
+
+    invoke-static {v4, v5}, Landroid/content/ClipData;->newRawUri(Ljava/lang/CharSequence;Landroid/net/Uri;)Landroid/content/ClipData;
+
+    move-result-object v4
+
+    invoke-virtual {v1, v4}, Landroid/content/Intent;->setClipData(Landroid/content/ClipData;)V
+
+    const/4 v4, 0x1
+
+    invoke-virtual {v1, v4}, Landroid/content/Intent;->addFlags(I)Landroid/content/Intent;
+
+    const-string v4, "share log"
+
+    invoke-static {v1, v4}, Landroid/content/Intent;->createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;
+
+    move-result-object v1
+
+    invoke-virtual {v0, v1}, Landroid/app/Activity;->startActivity(Landroid/content/Intent;)V
+
+    :ret
+    return-void
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    :catch_0
+    const-string v0, "share failed: no log file"
+
+    invoke-virtual {p0, v0}, Lcom/qw/workshop/Bridge;->toast(Ljava/lang/String;)V
+
+    return-void
+.end method
+
+.method public logSave()Ljava/lang/String;
+    .locals 10
+
+    .annotation runtime Landroid/webkit/JavascriptInterface;
+    .end annotation
+
+    :try_start_ls
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->readAll()Ljava/lang/String;
+
+    move-result-object v1
+
+    new-instance v2, Ljava/text/SimpleDateFormat;
+
+    const-string v3, "yyyyMMdd-HHmmss"
+
+    invoke-direct {v2, v3}, Ljava/text/SimpleDateFormat;-><init>(Ljava/lang/String;)V
+
+    new-instance v3, Ljava/util/Date;
+
+    invoke-direct {v3}, Ljava/util/Date;-><init>()V
+
+    invoke-virtual {v2, v3}, Ljava/text/SimpleDateFormat;->format(Ljava/util/Date;)Ljava/lang/String;
+
+    move-result-object v2
+
+    new-instance v3, Ljava/io/File;
+
+    const-string v5, "/storage/emulated/0/Download/QW-Workshop-日志"
+
+    invoke-direct {v3, v5}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v3}, Ljava/io/File;->mkdirs()Z
+
+    new-instance v5, Ljava/lang/StringBuilder;
+
+    const-string v6, "qw-log-"
+
+    invoke-direct {v5, v6}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v5, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    const-string v6, ".txt"
+
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v2
+
+    new-instance v4, Ljava/io/File;
+
+    invoke-direct {v4, v3, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+
+    new-instance v5, Ljava/lang/StringBuilder;
+
+    const-string v6, "==== QW工坊日志导出 ====\n"
+
+    invoke-direct {v5, v6}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->info()Ljava/lang/String;
+
+    move-result-object v6
+
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    const-string v6, "\n\n==== 日志 ====\n"
+
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v5, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    const-string v6, "\n\n==== 崩溃记录 ====\n"
+
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    invoke-static {}, Lcom/qw/workshop/LogUtils;->readCrash()Ljava/lang/String;
+
+    move-result-object v6
+
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v5
+
+    const-string v6, "UTF-8"
+
+    invoke-virtual {v5, v6}, Ljava/lang/String;->getBytes(Ljava/lang/String;)[B
+
+    move-result-object v5
+
+    new-instance v0, Ljava/io/FileOutputStream;
+
+    invoke-direct {v0, v4}, Ljava/io/FileOutputStream;-><init>(Ljava/io/File;)V
+
+    invoke-virtual {v0, v5}, Ljava/io/FileOutputStream;->write([B)V
+
+    invoke-virtual {v0}, Ljava/io/FileOutputStream;->close()V
+
+    new-instance v0, Ljava/lang/StringBuilder;
+
+    const-string v1, "ok:"
+
+    invoke-direct {v0, v1}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v4}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+
+    move-result-object v1
+
+    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v0
+
+    :try_end_ls
+    .catch Ljava/lang/Throwable; {:try_start_ls .. :try_end_ls} :catch_ls
+
+    return-object v0
+
+    :catch_ls
+    move-exception v0
+
+    new-instance v1, Ljava/lang/StringBuilder;
+
+    const-string v2, "err:"
+
+    invoke-direct {v1, v2}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v0}, Ljava/lang/Throwable;->toString()Ljava/lang/String;
+
+    move-result-object v0
+
+    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v0
+
+    return-object v0
 .end method
