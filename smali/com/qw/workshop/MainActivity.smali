@@ -71,7 +71,7 @@
 
     iget-object v0, p0, Lcom/qw/workshop/MainActivity;->web2:Landroid/webkit/WebView;
 
-    if-nez v0, :hl_ret
+    if-eqz v0, :hl_no2
 
     iget-object v1, p0, Lcom/qw/workshop/MainActivity;->root:Landroid/widget/FrameLayout;
 
@@ -86,9 +86,10 @@
 
     iput-object v0, p0, Lcom/qw/workshop/MainActivity;->web2:Landroid/webkit/WebView;
 
+    :hl_no2
     iget-object v1, p0, Lcom/qw/workshop/MainActivity;->web:Landroid/webkit/WebView;
 
-    if-nez v1, :hl_ret
+    if-eqz v1, :hl_ret
 
     const-string v2, "window.qwOnLogin&&window.qwOnLogin()"
 
@@ -224,6 +225,8 @@
     invoke-virtual {v1, v0, v2}, Landroid/widget/FrameLayout;->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V
 
     invoke-virtual {p0, v1}, Landroid/app/Activity;->setContentView(Landroid/view/View;)V
+
+    invoke-static {p0}, Lcom/qw/workshop/LogUtils;->install(Landroid/content/Context;)V
 
     const/4 v2, 0x0
 
