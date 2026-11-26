@@ -109,16 +109,69 @@
       return ok;
     } catch (e2) { return false; }
   }
-
   function nativeReady() {
     if (!N && typeof window.QW !== 'undefined' && window.QW) N = window.QW;
     return !!(N && typeof N.httpGet === 'function');
   }
 
+  /* ---- v1.1.1 登录会话：SteamID 只认两个权威来源 ----
+     1) Steam 登录接口响应（steamID / transfer_info.params.steamID）
+     2) javaSteam LoggedOn 回调里的 clientSteamID（原生 QW.steamId()）
+     不再抓 Cookie 页面反查 —— 那条路不可靠，已删除。 */
+  function nativeSteamId() {
+    try { if (nativeReady() && typeof N.steamId === 'function') return String(N.steamId() || '').trim(); } catch (e) {}
+    return '';
+  }
+
+  function saveSid(sid) {
+    sid = String(sid || '').trim();
+    if (!sid) return false;
+    try {
+      if (nativeReady() && typeof N.saveSession === 'function') { N.saveSession(sid); return true; }
+      if (nativeReady() && typeof N.setLogin === 'function') { N.setLogin(sid); return true; }
+    } catch (e) {}
+    return false;
+  }
+
+
   function probe(m) {
+    try { if (N && N.logLine) N.logLine('I', 'JS', String(m)); } catch (e) {}
     try { if (N && N.probe) N.probe(String(m)); } catch (e) {}
     try { console.log(m); } catch (e) {}
   }
+  /* ---- v1.1.2 滚动修复：WebView 首帧 / 固定层销毁后可能丢失文档滚动状态 ---- */
+  function unfreeze(force) {
+    try {
+      void document.documentElement.offsetHeight;
+      void document.body.offsetHeight;
+      window.dispatchEvent(new Event('resize'));
+      if (force) { window.scrollTo(0, 1); window.scrollTo(0, 0); }
+    } catch (e) {}
+  }
+  /* show=true 显示免责声明；show=false 彻底关掉并唤醒滚动 */
+  function hideGate(show) {
+    var g = $('gate');
+    if (!g) return;
+    if (show) {
+      try { g.style.display = ''; } catch (e) {}
+      try { g.style.opacity = '1'; } catch (e) {}
+      try { g.style.pointerEvents = ''; } catch (e) {}
+      try { g.style.overflow = ''; } catch (e) {}
+      g.classList.remove('hide');
+      return;
+    }
+    try {
+      g.style.backdropFilter = 'none';
+      g.style.webkitBackdropFilter = 'none';
+      g.style.overflow = 'visible';
+      g.style.pointerEvents = 'none';
+    } catch (e) {}
+    g.classList.add('hide');
+    try { g.style.display = 'none'; } catch (e) {}
+    unfreeze(true);
+    setTimeout(function () { unfreeze(true); }, 160);
+  }
+
 
   function httpGet(url) {
     if (!nativeReady()) throw new Error('原生桥未就绪');
@@ -363,6 +416,7 @@
         render();
         updatePager();
         probe('LIST_OK n=' + items.length + ' first=' + items[0].id);
+        if (!window.__qwUnfo) { window.__qwUnfo = 1; try { unfreeze(true); } catch (e) {} }
       } catch (e) {
         probe('LIST_FAIL ' + (e && e.message ? e.message : e));
         st.list = [];
@@ -460,6 +514,7 @@
     if (v) v.classList.add('hide');
     $('detailBody').innerHTML = '';
     $('detailFoot').innerHTML = '';
+    try { unfreeze(false); } catch (e) {}
   }
 
   var curDetail = { id: '', img: '' };
@@ -1352,17 +1407,35 @@ window.qwBack = function () {
             if (!sid && (tp.steamid || tp.steamID)) sid = tp.steamid || tp.steamID;
             try { postForm(ti[i].url, tp); } catch (e2) {}
           }
-          if (sid) { try { N.setLogin(String(sid)); } catch (e3) {} }
           if (!sid) {
             var mm = String(txt || '').match(/steam[Ii][Dd](?:64)?"?\s*:\s*"?(\d{6,20})/);
-            if (mm) { sid = mm[1]; try { N.setLogin(String(sid)); } catch (e4) {} }
+            if (mm) sid = mm[1];
           }
           dbg('ok', 'sid=' + sid + '\n' + String(txt || ''));
           var pe = $('stPass'); if (pe) pe.value = '';
-          toast(sid ? '登录成功' : '登录成功（未取到 SteamID，正在按 Cookie 反查）');
-          window.__loginBusy = false; loginFormOpen = false;
-          refreshLogin();
-          if (!sid) { probe('LOGIN_NOSID'); fetchMe(true); }
+          /* SteamID 收尾：接口没给就读 javaSteam LoggedOn 回调里的 clientSteamID
+             （客户端登录可能比网页接口稍慢，最多等 12 秒）。
+             两条权威来源都拿不到才算失败 —— 不再按 Cookie 抓页面反查。 */
+          var tries = 0;
+          (function settleSid() {
+            var s2 = String(sid || '').trim() || nativeSteamId();
+            if (s2) {
+              saveSid(s2);
+              probe('LOGIN_SID ' + s2);
+              toast('登录成功');
+              window.__loginBusy = false; loginFormOpen = false;
+              refreshLogin();
+              return;
+            }
+            tries++;
+            if (tries > 24) {
+              window.__loginBusy = false;
+              reset('登录已完成，但没取到 SteamID（登录接口与 Steam 客户端都没回）：请确认 VPN / 加速器已开启后重试。');
+              probe('LOGIN_NOSID');
+              return;
+            }
+            setTimeout(settleSid, 500);
+          })();
           return;
         }
         if (res.needs_twofactor || res.requires_twofactor) {
@@ -1423,40 +1496,13 @@ window.qwBack = function () {
     meTried = true;
     if (!nativeReady()) return;
     setTimeout(function () {
-      var ck = '';
-      try { ck = String(N.getCookies('https://steamcommunity.com') || ''); } catch (e0) {}
-      dbg('ck', 'community=' + ck.length + ' | ' + ck);
+      /* v1.1.1：这里只做「回填/显示」，不再用 Cookie 抓 my/?xml=1 反查 SteamID。
+         本地没有就向原生要 javaSteam 回调里的 clientSteamID，仍然没有就明确报未登录。 */
       var sid = '';
-      if (ck && ck.length > 0) try {
-        var xml = String(N.httpGet('https://steamcommunity.com/my/?xml=1') || '');
-        dbg('me', 'len=' + xml.length + '\n' + xml.slice(0, 400));
-        var doc = new DOMParser().parseFromString(xml, 'text/xml');
-        var s64 = doc.querySelector('steamID64');
-        sid = s64 ? s64.textContent.trim() : '';
-        if (!sid) {
-          var m1 = xml.match(/<steamID64>\s*(\d{6,20})\s*<\/steamID64>/);
-          if (m1) sid = m1[1];
-        }
-      } catch (e1) {}
-      if (!sid) {
-        try {
-          var acc = String(N.httpGet('https://store.steampowered.com/account/') || '');
-          dbg('acc', 'len=' + acc.length + '\n' + acc);
-          var m2 = acc.match(/Steam\s*ID\s*[：:]\s*(\d{6,20})/i)
-            || acc.match(/steamid"?\s*>\s*(?:Steam ID\s*[：:]?\s*)?(\d{6,20})/i)
-            || acc.match(/g_steamID\s*=\s*"(\d{6,20})"/)
-            || acc.match(/"steamid"\s*:\s*"?(\d{6,20})/)
-            || acc.match(/steamid64["'\s:]*(\d{6,20})/i)
-            || acc.match(/\/profiles\/(\d{6,20})/);
-          if (m2) sid = m2[1];
-          if (!sid) {
-            var m3 = acc.match(/accountid["'\s:]*(\d{4,10})/i) || acc.match(/accountid=(\d{4,10})/i);
-            if (m3) sid = String(76561197960265728 + parseInt(m3[1], 10));
-          }
-        } catch (e2) {}
-      }
-      if (!sid) { if (notify) toast('还没读到 Steam 登录状态'); return; }
-      try { N.setLogin(sid); } catch (e3) {}
+      try { sid = String(N.getLogin() || '').trim(); } catch (e0) {}
+      if (!sid) sid = nativeSteamId();
+      if (!sid) { if (notify) toast('还没登录 Steam'); refreshLogin(); return; }
+      saveSid(sid);
       refreshLogin();
       if (notify) toast('已登录：' + sid, 2500);
     }, 120);
@@ -1769,7 +1815,71 @@ window.qwBack = function () {
     if (m) { openDetail(m[1]); return; }
     st.q = t; st.page = 1; loadList(); toast('搜索：' + t);
   }
+  /* ---------------- v1.1.3 诊断与反馈 ---------------- */
+  function diagCopyText(txt) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.top = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, txt.length);
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) { return false; }
+  }
+
+  function diagRefresh() {
+    var inf = '', lg = '', cr = '';
+    try { if (N && N.logInfo) inf = String(N.logInfo() || ''); } catch (e) {}
+    try { if (N && N.logGet) lg = String(N.logGet() || ''); } catch (e) {}
+    try { if (N && N.logCrash) cr = String(N.logCrash() || ''); } catch (e) {}
+    var info = $('diagInfo');
+    if (info) info.textContent = inf || '（原生日志接口不可用）';
+    var box = $('diagLog');
+    if (box) box.textContent = lg ? lg.slice(-20000) : '（暂无日志）';
+    var tip = $('crashTip');
+    if (tip) {
+      if (cr) {
+        var head = String(cr.split('\n')[0] || '').replace(/^=+\s*/, '');
+        tip.textContent = '⚠ 检测到上次异常崩溃记录 · ' + head;
+        tip.classList.remove('hide');
+      } else {
+        tip.classList.add('hide');
+      }
+    }
+    var bc = $('diagCrash'), bd = $('diagClear');
+    if (bc) { if (cr) bc.classList.remove('hide'); else bc.classList.add('hide'); }
+    if (bd) { if (cr) bd.classList.remove('hide'); else bd.classList.add('hide'); }
+    return cr;
+  }
+
+  function openDiag() {
+    try { closeSettings(); } catch (e) {}
+    var box = $('diag');
+    if (!box) return;
+    box.classList.remove('hide');
+    var info = $('diagInfo');
+    if (info) info.textContent = '读取中…';
+    var lg = $('diagLog');
+    if (lg) lg.textContent = '读取中…';
+    setTimeout(function () { try { diagRefresh(); } catch (e) {} }, 40);
+  }
+
+  function closeDiag() {
+    var box = $('diag');
+    if (box) box.classList.add('hide');
+  }
+
   function bind() {
+    /* —— gate 显隐必须最先决定：已同意就从首帧隐藏，避免固定层销毁把滚动层搞坏 —— */
+    var agreed = null;
+    try { agreed = localStorage.getItem('qw_agree'); } catch (e) {}
+    try { hideGate(agreed === '1' ? false : true); } catch (eg0) {}
+
     /* —— 最先绑核心按钮：后面任何一条绑定失败都不影响这些 —— */
     on('gateYes', function () {
       if (window.__gateOk) return;
@@ -1777,11 +1887,7 @@ window.qwBack = function () {
       try { localStorage.setItem('qw_agree', '1'); } catch (e) {}
       /* 先立刻把免责声明整块从屏幕上拿掉，让点击有即时反馈；
          重活（恢复登录 / 拉首页）延后到下一两帧，避免低端机主线程被占住后全屏点不动 */
-      var g = $('gate');
-      if (g) {
-        g.classList.add('hide');
-        try { g.style.display = 'none'; } catch (e0) {}
-      }
+      hideGate();
       try { toast('欢迎使用 QW 工坊'); } catch (e) {}
       setTimeout(function () {
         try { refreshLogin(); } catch (e) {}
@@ -1799,6 +1905,43 @@ window.qwBack = function () {
         toast('请手动退出应用（长按返回键或从任务列表关闭）', 3600);
       };
       setTimeout(quit, 200);
+    });
+    on('btnDiag', openDiag);
+    on('diagClose', closeDiag);
+    on('diagCopy', function () {
+      var box = $('diagLog');
+      var txt = (box && box.textContent) || '';
+      if (!txt || txt === '读取中…') { toast('还没有日志可复制'); return; }
+      if (diagCopyText(txt)) toast('日志已复制到剪贴板'); else toast('复制失败，请长按日志手动选择');
+    });
+    on('diagShare', function () {
+      var r = '';
+      try { if (N && N.logSave) r = String(N.logSave() || ''); } catch (e) { r = 'err:' + e; }
+      if (r.indexOf('ok:') === 0) {
+        var p = r.slice(3);
+        var name = p.split('/').pop();
+        toast('日志已下载：Download/QW-Workshop-日志/' + name, 3600);
+        return;
+      }
+      if (r.indexOf('err:') === 0) {
+        toast('下载失败：' + r.slice(4).slice(0, 100), 4200);
+        return;
+      }
+      try {
+        if (N && N.logShare) { N.logShare(); return; }
+      } catch (e2) {}
+      toast('下载不可用（原生接口缺失）');
+    });
+    on('diagCrash', function () {
+      var cr = '';
+      try { if (N && N.logCrash) cr = String(N.logCrash() || ''); } catch (e) {}
+      var box = $('diagLog');
+      if (box) box.textContent = cr || '（没有崩溃记录）';
+    });
+    on('diagClear', function () {
+      try { if (N && N.logClear) N.logClear(); } catch (e) {}
+      toast('已清除崩溃记录');
+      setTimeout(function () { try { diagRefresh(); } catch (e) {} }, 60);
     });
     on('btnMenu', openDrawer);
     on('btnCfg', openSettings);
@@ -2021,8 +2164,7 @@ window.qwBack = function () {
     $('btnGateAgain').onclick = function () {
       closeSettings();
       window.__gateOk = 0;
-      var g = $('gate');
-      if (g) { try { g.style.display = ''; } catch (e) {} g.classList.remove('hide'); }
+      hideGate(true);
     };
 
     document.addEventListener('click', function (e) {
@@ -2073,7 +2215,7 @@ window.qwBack = function () {
   };
 
   function init() {
-    var v = '1.1.0';
+    var v = '1.1.4';
     if (nativeReady()) { try { v = N.getVersion(); } catch (e) {} }
     safe('migrAcc', migrAcc);              /* 抹掉旧的明文账号，只留打码名 */
     safe('bind', bind);                    /* 先绑按钮，后面任何初始化失败都不影响操作 */
@@ -2089,9 +2231,7 @@ window.qwBack = function () {
     });
     probe('BOOT v=' + v + ' ready=' + nativeReady());
 
-    var agreed = null;
-    try { agreed = localStorage.getItem('qw_agree'); } catch (e) {}
-    if (agreed === '1') { var g0 = $('gate'); if (g0) g0.classList.add('hide'); }
+    /* gate 显隐已在 bind() 开头处理（v1.1.2） */
 
     var w0 = window.innerWidth || 400;
     var defCols = defColsFor(w0);
@@ -2349,7 +2489,162 @@ function dlItemPause(t) {
     }, 260);
   }
 
+/* ================= 诊断：卡顿 / 滑不动 采样 ================= */
+var PF = { n: 0, max: 0, sum: 0, stuck: 0, clickLag: 0, longTask: 0, sent: 0, t0: Date.now() };
+
+function pfView() {
+  try {
+    if ($('diag') && !$('diag').classList.contains('hide')) return 'diag';
+    if ($('detail') && !$('detail').classList.contains('hide')) return 'detail';
+    if ($('gate') && !$('gate').classList.contains('hide')) return 'gate';
+    if ($('set') && !$('set').classList.contains('hide')) return 'set';
+    return 'list';
+  } catch (e) { return '?'; }
+}
+
+function pfLog(tag, msg) {
+  if (PF.sent > 60) return;   /* 限流：日志本身不能变成新的卡顿源 */
+  PF.sent++;
+  try { if (N && N.logLine) N.logLine('W', tag, '[' + tag + '] ' + msg); } catch (e) {}
+}
+
+function pfCount() {
+  try { return document.querySelectorAll('#list .card, #list .item, #grid .card').length; } catch (e) { return -1; }
+}
+
+/* 1) 帧间隔：>120ms 视为卡顿 */
+var pfLastT = 0;
+function pfTick(t) {
+  if (pfLastT) {
+    var gap = t - pfLastT;
+    if (gap > 120) {
+      PF.n++; PF.sum += gap; if (gap > PF.max) PF.max = gap;
+      pfLog('JANK', 'gap=' + Math.round(gap) + 'ms view=' + pfView() + ' cards=' + pfCount() + ' up=' + Math.round((Date.now() - PF.t0) / 1000) + 's');
+      if (PF.n === 10 || PF.n === 30 || PF.n === 60 || PF.n === 120) {
+        try { N.logLine('W', 'SUM', '[SUM] ' + perfSummary().replace(/\n/g, ' | ')); } catch (eSum) {}
+      }
+    }
+  }
+  pfLastT = t;
+  requestAnimationFrame(pfTick);
+}
+try { requestAnimationFrame(pfTick); } catch (ePF1) {}
+
+/* 2) longtask（浏览器支持才生效） */
+try {
+  if (window.PerformanceObserver && PerformanceObserver.supportedEntryTypes && PerformanceObserver.supportedEntryTypes.indexOf('longtask') >= 0) {
+    new PerformanceObserver(function (list) {
+      var es = list.getEntries() || [];
+      for (var i = 0; i < es.length && i < 3; i++) {
+        PF.longTask++;
+        pfLog('LONGTASK', 'dur=' + Math.round(es[i].duration) + 'ms name=' + String(es[i].name).slice(0, 40) + ' view=' + pfView());
+      }
+    }).observe({ entryTypes: ['longtask'] });
+  }
+} catch (ePF2) {}
+
+/* 3) 找可滚动容器 */
+function pfScrollEl(node) {
+  var el = node;
+  while (el && el.nodeType === 1 && el !== document.body && el !== document.documentElement) {
+    var st = null;
+    try { st = getComputedStyle(el); } catch (e) {}
+    if (st && /(auto|scroll|overlay)/.test(st.overflowY) && el.scrollHeight > el.clientHeight + 4) return el;
+    el = el.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+function pfTop(el) {
+  if (!el || el === document.scrollingElement || el === document.documentElement) return window.scrollY || document.documentElement.scrollTop || 0;
+  return el.scrollTop || 0;
+}
+
+/* 4) 滑不动：手指移动了 8 次以上，但滚动位置几乎没变 */
+var _pfTT = { y: 0, top: 0, moves: 0, t0: 0, el: null };
+function pfTS(e) {
+  if (!e.touches || !e.touches.length) return;
+  _pfTT.y = e.touches[0].clientY;
+  _pfTT.moves = 0;
+  _pfTT.t0 = Date.now();
+  _pfTT.el = pfScrollEl(e.target);
+  _pfTT.top = pfTop(_pfTT.el);
+}
+function pfTM(e) {
+  if (!e.touches || !e.touches.length) return;
+  _pfTT.moves++;
+  if (_pfTT.moves === 8 && _pfTT.el) {
+    var top = pfTop(_pfTT.el);
+    if (Math.abs(top - _pfTT.top) < 2) {
+      PF.stuck++;
+      var max = (_pfTT.el.scrollHeight || 0) - (_pfTT.el.clientHeight || 0);
+      pfLog('SCROLL_STUCK', 'moves=8 dy=' + Math.round(e.touches[0].clientY - _pfTT.y) + ' top=' + Math.round(top) + ' max=' + Math.round(max) + ' tag=' + (_pfTT.el.id || _pfTT.el.className || _pfTT.el.tagName) + ' view=' + pfView());
+    }
+  }
+}
+/* 5) 点按无响应：按了 260ms 以上、几乎没位移就抬手 */
+function pfTE() {
+  var dt = Date.now() - _pfTT.t0;
+  if (_pfTT.t0 && _pfTT.moves <= 2 && dt > 260) {
+    pfLog('TAP_HOLD', 'dur=' + dt + 'ms moves=' + _pfTT.moves + ' view=' + pfView());
+  }
+  _pfTT.t0 = 0;
+}
+try {
+  window.addEventListener('touchstart', pfTS, true);
+  window.addEventListener('touchmove', pfTM, true);
+  window.addEventListener('touchend', pfTE, true);
+  window.addEventListener('touchcancel', pfTE, true);
+} catch (ePF3) {}
+
+/* 6) 点击延迟：按下到 click 触发超过 220ms */
+var pfDownT = 0;
+try {
+  window.addEventListener('pointerdown', function () { pfDownT = Date.now(); }, true);
+  window.addEventListener('mousedown', function () { if (!pfDownT) pfDownT = Date.now(); }, true);
+  window.addEventListener('click', function (e) {
+    if (!pfDownT) return;
+    var d = Date.now() - pfDownT;
+    pfDownT = 0;
+    if (d > 220) {
+      PF.clickLag++;
+      var t = e.target || {};
+      pfLog('CLICK_LAG', 'dur=' + d + 'ms el=' + ((t.id ? '#' + t.id : '') || String(t.className || t.tagName || '?')) + ' view=' + pfView());
+    }
+  }, true);
+} catch (ePF4) {}
+
+/* 7) 环境一次性记录 */
+function pfEnv() {
+  var mem = '?';
+  try { if (performance && performance.memory) mem = Math.round(performance.memory.usedJSHeapSize / 1048576) + 'MB'; } catch (e) {}
+  pfLog('ENV', 'vp=' + window.innerWidth + 'x' + window.innerHeight + ' dpr=' + (window.devicePixelRatio || 1) + ' jsHeap=' + mem + ' cores=' + (navigator.hardwareConcurrency || '?') + ' cards=' + pfCount());
+}
+setTimeout(pfEnv, 1500);
+
+function perfSummary() {
+  var up = Math.round((Date.now() - PF.t0) / 1000);
+  var avg = PF.n ? Math.round(PF.sum / PF.n) : 0;
+  return '运行 ' + up + 's / 卡片 ' + pfCount() + '\n' +
+    '卡顿(>120ms) ' + PF.n + ' 次，最长 ' + Math.round(PF.max) + 'ms，平均 ' + avg + 'ms\n' +
+    '长任务 ' + PF.longTask + ' 次 / 点击延迟超标 ' + PF.clickLag + ' 次 / 滑不动 ' + PF.stuck + ' 次';
+}
+
+/* 8) 诊断面板里补一段性能摘要 */
+var pfDiagOld = (typeof diagRefresh === 'function') ? diagRefresh : null;
+if (pfDiagOld) {
+  diagRefresh = function () {
+    var r = pfDiagOld.apply(null, arguments);
+    try {
+      var info = $('diagInfo');
+      if (info && String(info.textContent).indexOf('【性能采样】') < 0) {
+        info.textContent = String(info.textContent) + '\n\n【性能采样】\n' + perfSummary();
+      }
+    } catch (e) {}
+    try { if (N && N.logLine) N.logLine('I', 'DIAG', '[DIAG] ' + perfSummary().replace(/\n/g, ' | ')); } catch (eDg) {}
+    return r;
+  };
+}
+
 try { cfmInit(); } catch (eCfm) {}
 setTimeout(natInit, 600);
-
 })();
