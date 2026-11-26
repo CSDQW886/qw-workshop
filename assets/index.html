@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#05070a">
 <title>QW工坊</title>
-<link rel="stylesheet" href="app.css?v=20">
+<link rel="stylesheet" href="app.css?v=22">
 </head>
 <body>
 
-<div id="gate" class="gate">
+<div id="gate" class="gate hide">
   <div class="gate-card">
     <div class="gate-logo">Q</div>
     <h1>QW 工坊 · 免责声明</h1>
@@ -170,12 +170,13 @@
         <div class="srow-d">文件权限：<span id="storTxt">读取中…</span></div>
         <button id="btnStor" class="btn mini">申请文件权限</button>
         <button id="btnPing" class="btn mini">重新检测</button>
+        <button id="btnDiag" class="btn mini prim">诊断与反馈</button>
       </div>
 
       <div class="srow">
         <div class="srow-t">关于</div>
         <div class="srow-d">
-          版本 <b id="verTxt2">1.1.0</b>（自建工程，包名 com.qw.workshop）<br>
+          版本 <b id="verTxt2">1.1.4</b>（自建工程，包名 com.qw.workshop）<br>
           基于 <a href="https://github.com/weilund/we-workshop/blob/main/README.md" target="_blank" rel="noopener" onclick="try{if(window.QW&amp;&amp;QW.openUrl){QW.openUrl(&#39;https://github.com/weilund/we-workshop/blob/main/README.md&#39;);return false}}catch(e){}" style="color:#6fa8ff;text-decoration:underline;word-break:break-all">https://github.com/weilund/we-workshop/blob/main/README.md</a> 开发，与原作者无隶属关系。<br>
           本项目已在 <b>GitHub</b> 开源：<a href="https://github.com/CSDQW886/qw-workshop.git" target="_blank" rel="noopener" onclick="try{if(window.QW&amp;&amp;QW.openUrl){QW.openUrl('https://github.com/CSDQW886/qw-workshop.git');return false}}catch(e){}" style="color:#6fa8ff;text-decoration:underline;word-break:break-all">https://github.com/CSDQW886/qw-workshop.git</a><br>
           作者：枪神爱吃牛肉面 · TG: @CSDQW558 · 禁止商用，转载请保留声明。<br>
@@ -184,6 +185,26 @@
         <button id="btnGateAgain" class="btn mini">重看免责声明</button>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<div id="diag" class="sheet hide">
+  <div class="sheet-card">
+    <div class="sheet-head"><span>诊断与反馈</span><button id="diagClose" class="ib">✕</button></div>
+    <div class="sheet-body">
+      <div id="crashTip" class="crash-tip hide"></div>
+      <pre id="diagInfo" class="diag-pre">读取中…</pre>
+      <p class="tip">日志只保存在本机 App 专属目录，保留最近 3 天。Steam 密码不会写入；Refresh Token 与 Cookie 在<b>写入之前</b>就替换成 ***，不会明文落盘。</p>
+      <div class="diag-acts">
+        <button id="diagCopy" class="btn">一键复制日志</button>
+        <button id="diagShare" class="btn prim">下载日志</button>
+      </div>
+      <div class="diag-acts">
+        <button id="diagCrash" class="btn mini hide">崩溃详情</button>
+        <button id="diagClear" class="btn mini hide">清除崩溃记录</button>
+      </div>
+      <pre id="diagLog" class="diag-log">读取中…</pre>
     </div>
   </div>
 </div>
@@ -229,6 +250,6 @@
   </div>
 </div>
 <div id="toasts" class="toasts"></div>
-<script src="app.js?v=176"></script>
+<script src="app.js?v=183"></script>
 </body>
 </html>
